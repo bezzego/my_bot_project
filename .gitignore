@@ -1,0 +1,12 @@
+# Environment variables and secret files
+.env
+
+# Python cache and compiled files
+__pycache__/
+*.py[cod]
+
+# Database files
+*.db
+
+# Virtual environment directory
+venv/
