@@ -7,8 +7,8 @@ from messages import WELCOME_MESSAGE
 
 # Inline keyboard with two buttons for the guides
 guide_menu = InlineKeyboardMarkup(inline_keyboard=[
-    [InlineKeyboardButton(text="Гайд гастропутешествия", callback_data="guide_gastro")],
-    [InlineKeyboardButton(text="Петербург до 1000 рублей", callback_data="guide_spb")]
+    [InlineKeyboardButton(text="Гастропутешествия по России", callback_data="guide_gastro")],
+    [InlineKeyboardButton(text="Петербург за 0₽/500₽/1000₽", callback_data="guide_spb")]
 ])
 
 async def send_welcome(message: types.Message):
