@@ -1,2 +1,4 @@
-aiogram==2.25.1
+aiogram==3.*
 python-dotenv==0.21.0
+aiosqlite
+greenlet

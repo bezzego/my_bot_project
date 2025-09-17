@@ -1,58 +1,93 @@
-from aiogram import types
+from aiogram import types, F
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.exceptions import TelegramBadRequest
 from config import dp, bot, CHANNEL_ID_GASTRO_PETER, CHANNEL_ID_SMALL_PETER
 from config import CHANNEL_USERNAME_GASTRO_PETER, CHANNEL_USERNAME_SMALL_PETER
 from config import GASTRO_GUIDE_FILE_ID, SMALL_PETER_FILE_ID
 from messages import ALREADY_SUBSCRIBED_GASTRO, ALREADY_SUBSCRIBED_SMALL, NOT_SUBSCRIBED_PROMPT
 
-@dp.callback_query_handler(lambda call: call.data == "guide_gastro")
 async def process_gastro_guide(call: types.CallbackQuery):
-    """Handles the inline button for 'Гайд гастропутешествия'."""
     user_id = call.from_user.id
-    # Check subscription status for the gastro guide channel
-    is_member = False
+    # Попробуем проверить через username — обычно надёжнее для публичных каналов
     try:
-        member = await bot.get_chat_member(CHANNEL_ID_GASTRO_PETER, user_id)
-        # Consider subscribed if status is "member" or any role (administrator/creator)
+        member = await bot.get_chat_member(CHANNEL_USERNAME_GASTRO_PETER, user_id)
         if member.status in ("member", "administrator", "creator"):
-            is_member = True
-    except Exception:
-        # An exception likely means the bot couldn't find the user (not a member or bot not an admin in channel)
-        is_member = False
+            await bot.send_document(user_id, GASTRO_GUIDE_FILE_ID, caption=ALREADY_SUBSCRIBED_GASTRO)
+            await call.answer()
+            return
+        # Если статус left/kicked или другой — считаем не подписанным
+    except TelegramBadRequest as e:
+        # Telegram может вернуть "member list is inaccessible" для каналов
+        print(f"Ошибка при проверке подписки (gastro): {e}")
+    except Exception as e:
+        print(f"Неожиданная ошибка при проверке подписки (gastro): {e}")
 
-    if not is_member:
-        # User is not subscribed to the channel – prompt to subscribe
-        subscribe_btn = InlineKeyboardButton(text="Подписаться", url=f"https://t.me/{CHANNEL_USERNAME_GASTRO_PETER[1:]}")
-        subscribe_kb = InlineKeyboardMarkup().add(subscribe_btn)
-        # Format the prompt message with the channel username
-        prompt_text = NOT_SUBSCRIBED_PROMPT.format(channel_name=CHANNEL_USERNAME_GASTRO_PETER)
-        await call.message.answer(prompt_text, reply_markup=subscribe_kb)
-    else:
-        # User is subscribed – send the PDF file with a caption
-        await bot.send_document(user_id, GASTRO_GUIDE_FILE_ID, caption=ALREADY_SUBSCRIBED_GASTRO)
-    # Acknowledge the callback to remove "loading" state
+    # Фоллбек: показываем пользователю ссылку на канал и кнопку для повторной проверки
+    open_btn = InlineKeyboardButton(text="Открыть канал", url=f"https://t.me/{CHANNEL_USERNAME_GASTRO_PETER.lstrip('@')}")
+    check_btn = InlineKeyboardButton(text="Я подписался — проверить", callback_data="check_gastro")
+    kb = InlineKeyboardMarkup(inline_keyboard=[[open_btn], [check_btn]])
+    await call.message.answer(NOT_SUBSCRIBED_PROMPT.format(channel_name=CHANNEL_USERNAME_GASTRO_PETER), reply_markup=kb)
     await call.answer()
 
-@dp.callback_query_handler(lambda call: call.data == "guide_spb")
 async def process_spb_guide(call: types.CallbackQuery):
-    """Handles the inline button for 'Петербург до 1000 рублей'."""
     user_id = call.from_user.id
-    # Check subscription status for the "Маленький Петербуржец" channel
-    is_member = False
     try:
-        member = await bot.get_chat_member(CHANNEL_ID_SMALL_PETER, user_id)
+        member = await bot.get_chat_member(CHANNEL_USERNAME_SMALL_PETER, user_id)
         if member.status in ("member", "administrator", "creator"):
-            is_member = True
-    except Exception:
-        is_member = False
+            await bot.send_document(user_id, SMALL_PETER_FILE_ID, caption=ALREADY_SUBSCRIBED_SMALL)
+            await call.answer()
+            return
+    except TelegramBadRequest as e:
+        print(f"Ошибка при проверке подписки (spb): {e}")
+    except Exception as e:
+        print(f"Неожиданная ошибка при проверке подписки (spb): {e}")
 
-    if not is_member:
-        # Not subscribed – prompt to subscribe to the channel
-        subscribe_btn = InlineKeyboardButton(text="Подписаться", url=f"https://t.me/{CHANNEL_USERNAME_SMALL_PETER[1:]}")
-        subscribe_kb = InlineKeyboardMarkup().add(subscribe_btn)
-        prompt_text = NOT_SUBSCRIBED_PROMPT.format(channel_name=CHANNEL_USERNAME_SMALL_PETER)
-        await call.message.answer(prompt_text, reply_markup=subscribe_kb)
-    else:
-        # Subscribed – send the PDF file with caption
-        await bot.send_document(user_id, SMALL_PETER_FILE_ID, caption=ALREADY_SUBSCRIBED_SMALL)
+    open_btn = InlineKeyboardButton(text="Открыть канал", url=f"https://t.me/{CHANNEL_USERNAME_SMALL_PETER.lstrip('@')}")
+    check_btn = InlineKeyboardButton(text="Я подписался — проверить", callback_data="check_spb")
+    kb = InlineKeyboardMarkup(inline_keyboard=[[open_btn], [check_btn]])
+    await call.message.answer(NOT_SUBSCRIBED_PROMPT.format(channel_name=CHANNEL_USERNAME_SMALL_PETER), reply_markup=kb)
     await call.answer()
+
+# ✅ Регистрация обработчиков для callback-запросов с использованием F.data вместо лямбда
+dp.callback_query.register(process_gastro_guide, F.data == "guide_gastro")
+dp.callback_query.register(process_spb_guide, F.data == "guide_spb")
+
+
+async def check_gastro_callback(call: types.CallbackQuery):
+    """Callback when user pressed "Я подписался — проверить" for gastro channel."""
+    user_id = call.from_user.id
+    try:
+        member = await bot.get_chat_member(CHANNEL_USERNAME_GASTRO_PETER, user_id)
+        if member.status in ("member", "administrator", "creator"):
+            await bot.send_document(user_id, GASTRO_GUIDE_FILE_ID, caption=ALREADY_SUBSCRIBED_GASTRO)
+        else:
+            await call.message.answer(NOT_SUBSCRIBED_PROMPT.format(channel_name=CHANNEL_USERNAME_GASTRO_PETER))
+    except TelegramBadRequest as e:
+        print(f"Re-check error (gastro): {e}")
+        await call.message.answer(NOT_SUBSCRIBED_PROMPT.format(channel_name=CHANNEL_USERNAME_GASTRO_PETER))
+    except Exception as e:
+        print(f"Unexpected re-check error (gastro): {e}")
+        await call.message.answer(NOT_SUBSCRIBED_PROMPT.format(channel_name=CHANNEL_USERNAME_GASTRO_PETER))
+    await call.answer()
+
+
+async def check_spb_callback(call: types.CallbackQuery):
+    """Callback when user pressed "Я подписался — проверить" for small peter channel."""
+    user_id = call.from_user.id
+    try:
+        member = await bot.get_chat_member(CHANNEL_USERNAME_SMALL_PETER, user_id)
+        if member.status in ("member", "administrator", "creator"):
+            await bot.send_document(user_id, SMALL_PETER_FILE_ID, caption=ALREADY_SUBSCRIBED_SMALL)
+        else:
+            await call.message.answer(NOT_SUBSCRIBED_PROMPT.format(channel_name=CHANNEL_USERNAME_SMALL_PETER))
+    except TelegramBadRequest as e:
+        print(f"Re-check error (spb): {e}")
+        await call.message.answer(NOT_SUBSCRIBED_PROMPT.format(channel_name=CHANNEL_USERNAME_SMALL_PETER))
+    except Exception as e:
+        print(f"Unexpected re-check error (spb): {e}")
+        await call.message.answer(NOT_SUBSCRIBED_PROMPT.format(channel_name=CHANNEL_USERNAME_SMALL_PETER))
+    await call.answer()
+
+
+dp.callback_query.register(check_gastro_callback, F.data == "check_gastro")
+dp.callback_query.register(check_spb_callback, F.data == "check_spb")

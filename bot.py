@@ -1,7 +1,19 @@
 import asyncio
-from aiogram import executor
-from config import dp
+import logging
+
+# Используем общий экземпляр bot и dp из config.py, где они созданы
+from config import bot, dp
+
+# Импортируем хэндлеры для регистрации событий (они регистрируются при импорте)
+import handlers.start
+import handlers.callbacks
+
+
+async def main():
+    logging.basicConfig(level=logging.INFO)
+    logging.info("Бот запускается…")
+    await dp.start_polling(bot)
+
 
 if __name__ == "__main__":
-    # Start polling Telegram for new updates. skip_updates=True ignores old queued updates.
-    executor.start_polling(dp, skip_updates=True)
+    asyncio.run(main())

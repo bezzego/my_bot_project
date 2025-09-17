@@ -9,4 +9,9 @@ __pycache__/
 *.db
 
 # Virtual environment directory
-venv/
+.venv/
+# IDE and editor specific files
+.vscode/        
+.idea/
+*.sublime-project
+*.sublime-workspace 
