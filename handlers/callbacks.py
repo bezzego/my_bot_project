@@ -23,7 +23,7 @@ async def process_gastro_guide(call: types.CallbackQuery):
         print(f"Неожиданная ошибка при проверке подписки (gastro): {e}")
 
     # Фоллбек: показываем пользователю ссылку на канал и кнопку для повторной проверки
-    open_btn = InlineKeyboardButton(text="Открыть канал", url=f"https://t.me/{CHANNEL_USERNAME_GASTRO_PETER.lstrip('@')}")
+    open_btn = InlineKeyboardButton(text="Открыть канал", url="https://t.me/+roCddrzBalQ2OGNi")
     check_btn = InlineKeyboardButton(text="Я подписался — проверить", callback_data="check_gastro")
     kb = InlineKeyboardMarkup(inline_keyboard=[[open_btn], [check_btn]])
     await call.message.answer(NOT_SUBSCRIBED_PROMPT.format(channel_name=CHANNEL_USERNAME_GASTRO_PETER), reply_markup=kb)
@@ -42,7 +42,7 @@ async def process_spb_guide(call: types.CallbackQuery):
     except Exception as e:
         print(f"Неожиданная ошибка при проверке подписки (spb): {e}")
 
-    open_btn = InlineKeyboardButton(text="Открыть канал", url=f"https://t.me/{CHANNEL_USERNAME_SMALL_PETER.lstrip('@')}")
+    open_btn = InlineKeyboardButton(text="Открыть канал", url="https://t.me/+ZDfXoeNM6ukwNGVi")
     check_btn = InlineKeyboardButton(text="Я подписался — проверить", callback_data="check_spb")
     kb = InlineKeyboardMarkup(inline_keyboard=[[open_btn], [check_btn]])
     await call.message.answer(NOT_SUBSCRIBED_PROMPT.format(channel_name=CHANNEL_USERNAME_SMALL_PETER), reply_markup=kb)
