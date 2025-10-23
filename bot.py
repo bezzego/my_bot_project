@@ -7,6 +7,7 @@ from config import bot, dp
 # Импортируем хэндлеры для регистрации событий (они регистрируются при импорте)
 import handlers.start
 import handlers.callbacks
+import handlers.admin
 
 
 async def main():
