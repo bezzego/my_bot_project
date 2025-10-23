@@ -37,6 +37,7 @@ def init_db():
             CREATE TABLE IF NOT EXISTS channels (
                 id              INTEGER PRIMARY KEY AUTOINCREMENT,
                 title           TEXT NOT NULL,
+                button_title    TEXT NOT NULL DEFAULT '',
                 chat_identifier TEXT NOT NULL,
                 invite_link     TEXT,
                 magnet_type     TEXT NOT NULL,
@@ -61,7 +62,17 @@ def init_db():
             )
             """
         )
+        _ensure_channel_schema(cursor)
         conn.commit()
+
+
+def _ensure_channel_schema(cursor: sqlite3.Cursor):
+    """Гарантирует наличие всех новых полей в таблице channels."""
+    cursor.execute("PRAGMA table_info(channels)")
+    columns = {row["name"] for row in cursor.fetchall()}
+    if "button_title" not in columns:
+        cursor.execute("ALTER TABLE channels ADD COLUMN button_title TEXT")
+        cursor.execute("UPDATE channels SET button_title = title WHERE button_title IS NULL OR button_title = ''")
 
 
 def add_user(user_id: int, username: str):
@@ -80,6 +91,7 @@ def add_user(user_id: int, username: str):
 
 def add_channel(
     title: str,
+    button_title: str,
     chat_identifier: str,
     invite_link: Optional[str],
     magnet_type: str,
@@ -93,15 +105,16 @@ def add_channel(
             """
             INSERT INTO channels (
                 title,
+                button_title,
                 chat_identifier,
                 invite_link,
                 magnet_type,
                 magnet_payload,
                 magnet_caption
             )
-            VALUES (?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
-            (title, chat_identifier, invite_link, magnet_type, magnet_payload, magnet_caption),
+            (title, button_title, chat_identifier, invite_link, magnet_type, magnet_payload, magnet_caption),
         )
         conn.commit()
         return cursor.lastrowid

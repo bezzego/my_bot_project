@@ -72,7 +72,7 @@ async def _is_user_subscribed(channel_row, user_id: int) -> bool:
 
 
 async def _send_lead_magnet(user_id: int, channel_row) -> bool:
-    channel_title = channel_row["title"]
+    channel_title = channel_row["button_title"] or channel_row["title"]
     magnet_type = channel_row["magnet_type"]
     payload = channel_row["magnet_payload"]
     caption = channel_row["magnet_caption"]
@@ -134,7 +134,12 @@ async def handle_view_rewards(call: types.CallbackQuery):
 
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text=row["title"], callback_data=f"channel:reward:{row['id']}")]
+            [
+                InlineKeyboardButton(
+                    text=(row["button_title"] or row["title"]),
+                    callback_data=f"channel:reward:{row['id']}",
+                )
+            ]
             for row in rewards
         ]
         + [[InlineKeyboardButton(text="🔝 В меню", callback_data="channel:menu")]]

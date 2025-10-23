@@ -9,7 +9,12 @@ from messages import MENU_PROMPT, NO_CHANNELS_MESSAGE, WELCOME_MESSAGE
 
 def _build_channel_keyboard(channels, include_rewards_button: bool) -> InlineKeyboardMarkup:
     rows = [
-        [InlineKeyboardButton(text=channel["title"], callback_data=f"channel:open:{channel['id']}")]
+        [
+            InlineKeyboardButton(
+                text=(channel["button_title"] or channel["title"]),
+                callback_data=f"channel:open:{channel['id']}",
+            )
+        ]
         for channel in channels
     ]
     if include_rewards_button:

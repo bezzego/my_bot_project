@@ -7,7 +7,13 @@ from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, Teleg
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.types import (
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    KeyboardButton,
+    ReplyKeyboardMarkup,
+    ReplyKeyboardRemove,
+)
 
 from config import ADMIN_IDS, bot, dp
 from database import (
@@ -20,11 +26,13 @@ from database import (
     set_channel_active,
     update_channel,
 )
+from handlers.start import send_channel_menu
 
 
 class AddChannelStates(StatesGroup):
     waiting_for_chat_identifier = State()
     waiting_for_invite_link = State()
+    waiting_for_button_title = State()
     waiting_for_magnet_type = State()
     waiting_for_magnet_payload = State()
     waiting_for_caption = State()
@@ -47,6 +55,11 @@ class BroadcastStates(StatesGroup):
     waiting_for_content = State()
     waiting_for_button = State()
     waiting_for_confirmation = State()
+
+
+class ButtonTitleStates(StatesGroup):
+    waiting_for_channel_choice = State()
+    waiting_for_button_title = State()
 
 
 MAGNET_TYPES = {
@@ -72,8 +85,10 @@ async def send_admin_menu(event: types.Message | types.CallbackQuery):
             [InlineKeyboardButton(text="✏️ Изменить литмагнит", callback_data="admin:edit")],
             [InlineKeyboardButton(text="🗑 Удалить канал", callback_data="admin:delete")],
             [InlineKeyboardButton(text="📋 Список каналов", callback_data="admin:list")],
+            [InlineKeyboardButton(text="🖊 Название кнопки", callback_data="admin:button_title")],
             [InlineKeyboardButton(text="📊 Статистика", callback_data="admin:stats")],
             [InlineKeyboardButton(text="📨 Рассылка", callback_data="admin:broadcast")],
+            [InlineKeyboardButton(text="⬅️ Закрыть панель", callback_data="admin:exit")],
         ]
     )
 
@@ -109,6 +124,46 @@ def is_cancel_text(text: Optional[str]) -> bool:
 
 def is_skip_text(text: Optional[str]) -> bool:
     return text is not None and text.strip().lower() in {"пропустить", "skip", "нет"}
+
+
+def is_use_channel_title_text(text: Optional[str]) -> bool:
+    return text is not None and text.strip().lower() in {
+        "использовать название канала",
+        "название канала",
+        "use channel title",
+    }
+
+
+def build_reply_keyboard(
+    *,
+    cancel: bool = True,
+    skip: bool = False,
+    extras: Optional[Tuple[str, ...]] = None,
+    placeholder: Optional[str] = None,
+) -> ReplyKeyboardMarkup:
+    rows = []
+    first_row = []
+    if cancel:
+        first_row.append(KeyboardButton(text="Отмена"))
+    if skip:
+        first_row.append(KeyboardButton(text="Пропустить"))
+    if first_row:
+        rows.append(first_row)
+    if extras:
+        for text in extras:
+            rows.append([KeyboardButton(text=text)])
+    return ReplyKeyboardMarkup(
+        keyboard=rows,
+        resize_keyboard=True,
+        one_time_keyboard=True,
+        input_field_placeholder=placeholder,
+    )
+
+
+async def abort_flow(message: types.Message, state: FSMContext, text: str):
+    await message.answer(text, reply_markup=ReplyKeyboardRemove())
+    await state.clear()
+    await send_admin_menu(message)
 
 
 def magnet_type_keyboard(prefix: str) -> InlineKeyboardMarkup:
@@ -208,6 +263,7 @@ def extract_magnet_payload(message: types.Message, magnet_type: str) -> Tuple[Op
 @dp.message(Command("admin"))
 @admin_only
 async def handle_admin_command(message: types.Message, **_):
+    await message.answer("Открываю панель администратора…", reply_markup=ReplyKeyboardRemove())
     await send_admin_menu(message)
 
 
@@ -218,15 +274,25 @@ async def handle_admin_menu_callback(call: types.CallbackQuery, state: FSMContex
     await send_admin_menu(call)
 
 
+@dp.callback_query(F.data == "admin:exit")
+@admin_only
+async def handle_admin_exit(call: types.CallbackQuery, state: FSMContext, **_):
+    await state.clear()
+    await call.answer("Панель закрыта.")
+    await call.message.answer("Возвращаю в пользовательское меню.", reply_markup=ReplyKeyboardRemove())
+    await send_channel_menu(call)
+
+
 @dp.callback_query(F.data == "admin:add")
 @admin_only
 async def start_add_channel(call: types.CallbackQuery, state: FSMContext, **_):
     await state.clear()
     await call.answer()
     await call.message.answer(
-        "Шаг 1/3. Отправьте ID или @username канала, который нужно добавить.\n"
+        "Шаг 1/4. Отправьте ID или @username канала, который нужно добавить.\n"
         "Можно также отправить прямую ссылку, но для приватных ссылок потребуется числовой ID.\n"
-        "Напишите 'Отмена' для выхода."
+        "Используйте кнопку 'Отмена' в клавиатуре для выхода.",
+        reply_markup=build_reply_keyboard(cancel=True, placeholder="@username или ID")
     )
     await state.set_state(AddChannelStates.waiting_for_chat_identifier)
 
@@ -234,25 +300,27 @@ async def start_add_channel(call: types.CallbackQuery, state: FSMContext, **_):
 @dp.message(AddChannelStates.waiting_for_chat_identifier)
 async def process_add_chat_identifier(message: types.Message, state: FSMContext):
     if not is_admin(message.from_user.id):
-        await message.answer("Эта команда доступна только администраторам.")
+        await message.answer("Эта команда доступна только администраторам.", reply_markup=ReplyKeyboardRemove())
         await state.clear()
         return
 
     if not message.text:
-        await message.answer("Пожалуйста, отправьте текст с ID или ссылкой на канал.")
+        await message.answer(
+            "Пожалуйста, отправьте текст с ID или ссылкой на канал.",
+            reply_markup=build_reply_keyboard(cancel=True, placeholder="@username или ID")
+        )
         return
 
     if is_cancel_text(message.text):
-        await message.answer("Добавление канала отменено.")
-        await state.clear()
-        await send_admin_menu(message)
+        await abort_flow(message, state, "Добавление канала отменено.")
         return
 
     chat_identifier, invite_link = parse_chat_reference(message.text)
     if chat_identifier is None:
         await message.answer(
             "Не удалось определить канал. Отправьте username в формате @channel или числовой ID.\n"
-            "Если у вас только приватная ссылка-приглашение, сначала получите ID канала и повторите попытку."
+            "Если у вас только приватная ссылка-приглашение, сначала получите ID канала и повторите попытку.",
+            reply_markup=build_reply_keyboard(cancel=True, placeholder="@username или ID")
         )
         return
 
@@ -261,7 +329,8 @@ async def process_add_chat_identifier(message: types.Message, state: FSMContext)
     except TelegramBadRequest:
         await message.answer(
             "Не удалось получить информацию о канале. Убедитесь, что бот добавлен в канал как администратор "
-            "и что указан корректный ID/username."
+            "и что указан корректный ID/username.",
+            reply_markup=build_reply_keyboard(cancel=True, placeholder="@username или ID"),
         )
         return
 
@@ -281,13 +350,15 @@ async def process_add_chat_identifier(message: types.Message, state: FSMContext)
 
     if invite_link:
         await message.answer(
-            f"Будет использована ссылка для кнопки:\n{invite_link}\n"
-            "Если нужно указать другую, отправьте новую ссылку. Для пропуска напишите 'пропустить'."
+            f"Шаг 2/4. Будет использована ссылка для кнопки:\n{invite_link}\n"
+            "Если нужно указать другую, отправьте новую ссылку или воспользуйтесь кнопкой 'Пропустить'.",
+            reply_markup=build_reply_keyboard(cancel=True, skip=True, placeholder="Новая ссылка или пропустить")
         )
     else:
         await message.answer(
-            "Отправьте ссылку, которую будем показывать пользователям (например, приглашение) "
-            "или напишите 'пропустить', чтобы оставить поле пустым."
+            "Шаг 2/4. Отправьте ссылку, которую будем показывать пользователям (например, приглашение) "
+            "или воспользуйтесь кнопкой 'Пропустить'.",
+            reply_markup=build_reply_keyboard(cancel=True, skip=True, placeholder="Ссылка или пропустить")
         )
 
     await state.set_state(AddChannelStates.waiting_for_invite_link)
@@ -296,35 +367,97 @@ async def process_add_chat_identifier(message: types.Message, state: FSMContext)
 @dp.message(AddChannelStates.waiting_for_invite_link)
 async def process_add_invite_link(message: types.Message, state: FSMContext):
     if not is_admin(message.from_user.id):
-        await message.answer("Эта команда доступна только администраторам.")
+        await message.answer("Эта команда доступна только администраторам.", reply_markup=ReplyKeyboardRemove())
         await state.clear()
         return
 
     if not message.text:
-        await message.answer("Пожалуйста, отправьте текстовую ссылку или напишите 'пропустить'.")
+        await message.answer(
+            "Пожалуйста, отправьте текстовую ссылку или воспользуйтесь кнопкой 'Пропустить'.",
+            reply_markup=build_reply_keyboard(cancel=True, skip=True, placeholder="Ссылка или пропустить")
+        )
         return
 
     if is_cancel_text(message.text):
-        await message.answer("Добавление канала отменено.")
-        await state.clear()
-        await send_admin_menu(message)
+        await abort_flow(message, state, "Добавление канала отменено.")
         return
 
     data = await state.get_data()
     current_link = data.get("invite_link")
+    channel_title = data.get("channel_title", "Канал")
 
     if is_skip_text(message.text):
         invite_link = current_link
     else:
         link = message.text.strip()
         if not (link.startswith("http://") or link.startswith("https://")):
-            await message.answer("Ссылка должна начинаться с http:// или https://. Повторите ввод.")
+            await message.answer(
+                "Ссылка должна начинаться с http:// или https://. Повторите ввод.",
+                reply_markup=build_reply_keyboard(cancel=True, skip=True, placeholder="Ссылка или пропустить")
+            )
             return
         invite_link = link
 
     await state.update_data(invite_link=invite_link)
     await message.answer(
-        "Шаг 2/3. Выберите тип литмагнита для этого канала:",
+        "Шаг 3/4. Как будет называться кнопка в пользовательском меню?\n"
+        f"По умолчанию используем название канала: «{channel_title}».",
+        reply_markup=build_reply_keyboard(
+            cancel=True,
+            skip=True,
+            extras=("Использовать название канала",),
+            placeholder="Название кнопки",
+        ),
+    )
+    await state.set_state(AddChannelStates.waiting_for_button_title)
+
+
+@dp.message(AddChannelStates.waiting_for_button_title)
+async def process_add_button_title(message: types.Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        await message.answer("Эта команда доступна только администраторам.", reply_markup=ReplyKeyboardRemove())
+        await state.clear()
+        return
+
+    if not message.text:
+        await message.answer(
+            "Пожалуйста, отправьте текст кнопки или воспользуйтесь вариантами ниже.",
+            reply_markup=build_reply_keyboard(
+                cancel=True,
+                skip=True,
+                extras=("Использовать название канала",),
+                placeholder="Название кнопки",
+            ),
+        )
+        return
+
+    if is_cancel_text(message.text):
+        await abort_flow(message, state, "Добавление канала отменено.")
+        return
+
+    data = await state.get_data()
+    channel_title = data.get("channel_title", "Канал")
+
+    if is_skip_text(message.text) or is_use_channel_title_text(message.text):
+        button_title = channel_title
+    else:
+        button_title = message.text.strip()
+        if not button_title:
+            await message.answer(
+                "Название кнопки не может быть пустым. Попробуйте снова.",
+                reply_markup=build_reply_keyboard(
+                    cancel=True,
+                    skip=True,
+                    extras=("Использовать название канала",),
+                    placeholder="Название кнопки",
+                ),
+            )
+            return
+
+    await state.update_data(button_title=button_title)
+    await message.answer("Название кнопки сохранено.", reply_markup=ReplyKeyboardRemove())
+    await message.answer(
+        "Шаг 4/4. Выберите тип литмагнита для этого канала:",
         reply_markup=magnet_type_keyboard("admin:add:type"),
     )
     await state.set_state(AddChannelStates.waiting_for_magnet_type)
@@ -343,46 +476,50 @@ async def process_add_magnet_type(call: types.CallbackQuery, state: FSMContext, 
 
     if magnet_type == "document":
         prompt = (
-            "Шаг 3/3. Отправьте файл (документ). Можно сразу добавить подпись — она станет описанием литмагнита."
+            "Отправьте файл (документ). Можно сразу добавить подпись — она станет описанием литмагнита."
         )
     elif magnet_type == "photo":
         prompt = (
-            "Шаг 3/3. Отправьте изображение. Можно сразу добавить подпись — она станет описанием литмагнита."
+            "Отправьте изображение. Можно сразу добавить подпись — она станет описанием литмагнита."
         )
     elif magnet_type == "link":
-        prompt = "Шаг 3/3. Отправьте ссылку, которую получат пользователи."
+        prompt = "Отправьте ссылку, которую получат пользователи."
     else:
-        prompt = "Шаг 3/3. Отправьте текст литмагнита."
+        prompt = "Отправьте текст литмагнита."
 
-    await call.message.answer(prompt + "\nНапишите 'Отмена' для выхода.")
+    await call.message.answer(
+        prompt,
+        reply_markup=build_reply_keyboard(cancel=True, placeholder="Отправьте файл/сообщение или отмените"),
+    )
     await state.set_state(AddChannelStates.waiting_for_magnet_payload)
 
 
 @dp.message(AddChannelStates.waiting_for_magnet_payload)
 async def process_add_magnet_payload(message: types.Message, state: FSMContext):
     if not is_admin(message.from_user.id):
-        await message.answer("Эта команда доступна только администраторам.")
+        await message.answer("Эта команда доступна только администраторам.", reply_markup=ReplyKeyboardRemove())
         await state.clear()
         return
 
     cancel_candidate = message.text or message.caption
     if is_cancel_text(cancel_candidate):
-        await message.answer("Добавление канала отменено.")
-        await state.clear()
-        await send_admin_menu(message)
+        await abort_flow(message, state, "Добавление канала отменено.")
         return
 
     data = await state.get_data()
     magnet_type = data.get("magnet_type")
     if not magnet_type:
-        await message.answer("Тип литмагнита не выбран. Начните процесс заново.")
+        await message.answer("Тип литмагнита не выбран. Начните процесс заново.", reply_markup=ReplyKeyboardRemove())
         await state.clear()
         await send_admin_menu(message)
         return
 
     magnet_payload, caption, error = extract_magnet_payload(message, magnet_type)
     if error:
-        await message.answer(error)
+        await message.answer(
+            error,
+            reply_markup=build_reply_keyboard(cancel=True, placeholder="Отправьте корректные данные или отмените"),
+        )
         if error.startswith("Неизвестный"):
             await state.clear()
             await send_admin_menu(message)
@@ -397,7 +534,12 @@ async def process_add_magnet_payload(message: types.Message, state: FSMContext):
         await finalize_channel_creation(message, state)
     elif needs_caption:
         await message.answer(
-            "Отправьте текст, который прикрепим к литмагниту, или напишите 'пропустить', если он не нужен."
+            "Отправьте текст, который прикрепим к литмагниту, или воспользуйтесь кнопкой 'Пропустить'.",
+            reply_markup=build_reply_keyboard(
+                cancel=True,
+                skip=True,
+                placeholder="Описание или пропустить",
+            ),
         )
         await state.set_state(AddChannelStates.waiting_for_caption)
     else:
@@ -408,18 +550,23 @@ async def process_add_magnet_payload(message: types.Message, state: FSMContext):
 @dp.message(AddChannelStates.waiting_for_caption)
 async def process_add_caption(message: types.Message, state: FSMContext):
     if not is_admin(message.from_user.id):
-        await message.answer("Эта команда доступна только администраторам.")
+        await message.answer("Эта команда доступна только администраторам.", reply_markup=ReplyKeyboardRemove())
         await state.clear()
         return
 
     if not message.text:
-        await message.answer("Пожалуйста, отправьте текст или напишите 'пропустить'.")
+        await message.answer(
+            "Пожалуйста, отправьте текст или воспользуйтесь кнопкой 'Пропустить'.",
+            reply_markup=build_reply_keyboard(
+                cancel=True,
+                skip=True,
+                placeholder="Описание или пропустить",
+            ),
+        )
         return
 
     if is_cancel_text(message.text):
-        await message.answer("Добавление канала отменено.")
-        await state.clear()
-        await send_admin_menu(message)
+        await abort_flow(message, state, "Добавление канала отменено.")
         return
 
     caption = None if is_skip_text(message.text) else message.text
@@ -442,6 +589,7 @@ def shorten_text(value: str, limit: int = 120) -> str:
 async def finalize_channel_creation(message: types.Message, state: FSMContext):
     data = await state.get_data()
     channel_title = data.get("channel_title", "Без названия")
+    button_title = data.get("button_title") or channel_title
     chat_identifier = data.get("chat_identifier")
     invite_link = data.get("invite_link")
     magnet_type = data.get("magnet_type")
@@ -454,6 +602,7 @@ async def finalize_channel_creation(message: types.Message, state: FSMContext):
 
     channel_id = add_channel(
         title=channel_title,
+        button_title=button_title,
         chat_identifier=str(chat_identifier),
         invite_link=invite_link,
         magnet_type=magnet_type,
@@ -464,12 +613,13 @@ async def finalize_channel_creation(message: types.Message, state: FSMContext):
     await state.clear()
     summary_lines = [
         f"Канал «{channel_title}» успешно добавлен (ID записи: {channel_id}).",
+        f"Название кнопки: {button_title}",
         f"Тип литмагнита: {magnet_type_label(magnet_type)}",
     ]
     if invite_link:
         summary_lines.append(f"Ссылка для кнопки: {invite_link}")
 
-    await message.answer("\n".join(summary_lines))
+    await message.answer("\n".join(summary_lines), reply_markup=ReplyKeyboardRemove())
     await send_admin_menu(message)
 
 
@@ -487,6 +637,7 @@ async def handle_admin_list(call: types.CallbackQuery, state: FSMContext, **_):
     for channel in channels:
         status = "✅ Активен" if channel["is_active"] else "🚫 Отключен"
         lines.append(f"{channel['id']}. {channel['title']} — {status}")
+        lines.append(f"   Кнопка: {channel['button_title'] or channel['title']}")
         lines.append(f"   Идентификатор: {channel['chat_identifier']}")
         lines.append(f"   Тип: {magnet_type_label(channel['magnet_type'])}")
         if channel["invite_link"]:
@@ -496,6 +647,124 @@ async def handle_admin_list(call: types.CallbackQuery, state: FSMContext, **_):
         lines.append("")
 
     await call.message.answer("\n".join(lines).strip())
+
+
+@dp.callback_query(F.data == "admin:button_title")
+@admin_only
+async def start_button_title_edit(call: types.CallbackQuery, state: FSMContext, **_):
+    await state.clear()
+    channels = fetch_channels(active_only=False)
+    await call.answer()
+
+    if not channels:
+        await call.message.answer("Каналы ещё не добавлены.")
+        return
+
+    await call.message.answer(
+        "Выберите канал, для которого нужно задать название кнопки:",
+        reply_markup=build_channel_list_keyboard("admin:button", include_inactive=True),
+    )
+    await state.set_state(ButtonTitleStates.waiting_for_channel_choice)
+
+
+@dp.callback_query(ButtonTitleStates.waiting_for_channel_choice, F.data.startswith("admin:button:"))
+@admin_only
+async def choose_channel_for_button(call: types.CallbackQuery, state: FSMContext, **_):
+    try:
+        channel_id = int(call.data.split(":")[-1])
+    except (ValueError, IndexError):
+        await call.answer("Не удалось определить канал.", show_alert=True)
+        return
+
+    channel = fetch_channel(channel_id)
+    if not channel:
+        await call.answer("Канал не найден.", show_alert=True)
+        return
+
+    await state.update_data(
+        channel_id=channel_id,
+        channel_title=channel["title"],
+        current_button_title=channel["button_title"] or channel["title"],
+    )
+    await call.answer()
+    await call.message.answer(
+        "Отправьте новое название кнопки.\n"
+        f"Текущее значение: «{channel['button_title'] or channel['title']}».",
+        reply_markup=build_reply_keyboard(
+            cancel=True,
+            skip=True,
+            extras=("Использовать название канала",),
+            placeholder="Название кнопки",
+        ),
+    )
+    await state.set_state(ButtonTitleStates.waiting_for_button_title)
+
+
+@dp.message(ButtonTitleStates.waiting_for_button_title)
+async def process_button_title_edit(message: types.Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        await message.answer("Эта команда доступна только администраторам.", reply_markup=ReplyKeyboardRemove())
+        await state.clear()
+        return
+
+    if not message.text:
+        await message.answer(
+            "Пожалуйста, отправьте новое название или воспользуйтесь кнопками ниже.",
+            reply_markup=build_reply_keyboard(
+                cancel=True,
+                skip=True,
+                extras=("Использовать название канала",),
+                placeholder="Название кнопки",
+            ),
+        )
+        return
+
+    if is_cancel_text(message.text):
+        await abort_flow(message, state, "Изменение названия кнопки отменено.")
+        return
+
+    data = await state.get_data()
+    channel_id = data.get("channel_id")
+    channel_title = data.get("channel_title", "Канал")
+    current_button_title = data.get("current_button_title") or channel_title
+
+    if is_skip_text(message.text):
+        new_button_title = current_button_title
+    elif is_use_channel_title_text(message.text):
+        new_button_title = channel_title
+    else:
+        new_button_title = message.text.strip()
+        if not new_button_title:
+            await message.answer(
+                "Название кнопки не может быть пустым.",
+                reply_markup=build_reply_keyboard(
+                    cancel=True,
+                    skip=True,
+                    extras=("Использовать название канала",),
+                    placeholder="Название кнопки",
+                ),
+            )
+            return
+
+    if not channel_id:
+        await message.answer("Не удалось определить канал. Начните заново.", reply_markup=ReplyKeyboardRemove())
+        await state.clear()
+        await send_admin_menu(message)
+        return
+
+    updated = update_channel(channel_id, button_title=new_button_title)
+    await state.clear()
+    if updated:
+        await message.answer(
+            f"Название кнопки для «{channel_title}» обновлено на «{new_button_title}».",
+            reply_markup=ReplyKeyboardRemove(),
+        )
+    else:
+        await message.answer(
+            "Не удалось обновить название кнопки. Повторите попытку.",
+            reply_markup=ReplyKeyboardRemove(),
+        )
+    await send_admin_menu(message)
 
 
 @dp.callback_query(F.data == "admin:edit")
@@ -568,35 +837,39 @@ async def process_edit_magnet_type(call: types.CallbackQuery, state: FSMContext,
     else:
         prompt = "Отправьте новый текст литмагнита."
 
-    await call.message.answer(prompt + "\nНапишите 'Отмена' для отмены.")
+    await call.message.answer(
+        prompt,
+        reply_markup=build_reply_keyboard(cancel=True, placeholder="Отправьте данные или отмените"),
+    )
     await state.set_state(EditMagnetStates.waiting_for_magnet_payload)
 
 
 @dp.message(EditMagnetStates.waiting_for_magnet_payload)
 async def process_edit_magnet_payload(message: types.Message, state: FSMContext):
     if not is_admin(message.from_user.id):
-        await message.answer("Эта команда доступна только администраторам.")
+        await message.answer("Эта команда доступна только администраторам.", reply_markup=ReplyKeyboardRemove())
         await state.clear()
         return
 
     cancel_candidate = message.text or message.caption
     if is_cancel_text(cancel_candidate):
-        await message.answer("Изменение литмагнита отменено.")
-        await state.clear()
-        await send_admin_menu(message)
+        await abort_flow(message, state, "Изменение литмагнита отменено.")
         return
 
     data = await state.get_data()
     magnet_type = data.get("magnet_type")
     if not magnet_type:
-        await message.answer("Не выбран тип литмагнита. Начните заново.")
+        await message.answer("Не выбран тип литмагнита. Начните заново.", reply_markup=ReplyKeyboardRemove())
         await state.clear()
         await send_admin_menu(message)
         return
 
     magnet_payload, caption, error = extract_magnet_payload(message, magnet_type)
     if error:
-        await message.answer(error)
+        await message.answer(
+            error,
+            reply_markup=build_reply_keyboard(cancel=True, placeholder="Отправьте корректные данные или отмените"),
+        )
         if error.startswith("Неизвестный"):
             await state.clear()
             await send_admin_menu(message)
@@ -610,7 +883,12 @@ async def process_edit_magnet_payload(message: types.Message, state: FSMContext)
         await finalize_magnet_update(message, state)
     elif needs_caption:
         await message.answer(
-            "Отправьте текст-описание для литмагнита или напишите 'пропустить', чтобы оставить поле пустым."
+            "Отправьте текст-описание для литмагнита или воспользуйтесь кнопкой 'Пропустить'.",
+            reply_markup=build_reply_keyboard(
+                cancel=True,
+                skip=True,
+                placeholder="Описание или пропустить",
+            ),
         )
         await state.set_state(EditMagnetStates.waiting_for_caption)
     else:
@@ -621,18 +899,23 @@ async def process_edit_magnet_payload(message: types.Message, state: FSMContext)
 @dp.message(EditMagnetStates.waiting_for_caption)
 async def process_edit_caption(message: types.Message, state: FSMContext):
     if not is_admin(message.from_user.id):
-        await message.answer("Эта команда доступна только администраторам.")
+        await message.answer("Эта команда доступна только администраторам.", reply_markup=ReplyKeyboardRemove())
         await state.clear()
         return
 
     if not message.text:
-        await message.answer("Пожалуйста, отправьте текст или напишите 'пропустить'.")
+        await message.answer(
+            "Пожалуйста, отправьте текст или воспользуйтесь кнопкой 'Пропустить'.",
+            reply_markup=build_reply_keyboard(
+                cancel=True,
+                skip=True,
+                placeholder="Описание или пропустить",
+            ),
+        )
         return
 
     if is_cancel_text(message.text):
-        await message.answer("Изменение литмагнита отменено.")
-        await state.clear()
-        await send_admin_menu(message)
+        await abort_flow(message, state, "Изменение литмагнита отменено.")
         return
 
     caption = None if is_skip_text(message.text) else message.text
@@ -664,10 +947,14 @@ async def finalize_magnet_update(message: types.Message, state: FSMContext):
     await state.clear()
     if updated:
         await message.answer(
-            f"Литмагнит для «{channel_title}» обновлён.\nТип: {magnet_type_label(magnet_type)}."
+            f"Литмагнит для «{channel_title}» обновлён.\nТип: {magnet_type_label(magnet_type)}.",
+            reply_markup=ReplyKeyboardRemove(),
         )
     else:
-        await message.answer("Не удалось обновить запись. Проверьте данные и повторите попытку.")
+        await message.answer(
+            "Не удалось обновить запись. Проверьте данные и повторите попытку.",
+            reply_markup=ReplyKeyboardRemove(),
+        )
 
     await send_admin_menu(message)
 
@@ -814,7 +1101,8 @@ async def set_broadcast_type(call: types.CallbackQuery, state: FSMContext, **_):
         "document": "Отправьте документ с подписью (по желанию).",
     }
     await call.message.answer(
-        prompts.get(broadcast_type, "Отправьте содержимое сообщения.") + "\nНапишите 'Отмена' для отмены.",
+        prompts.get(broadcast_type, "Отправьте содержимое сообщения."),
+        reply_markup=build_reply_keyboard(cancel=True, placeholder="Отправьте сообщение или отмените"),
     )
     await state.set_state(BroadcastStates.waiting_for_content)
 
@@ -822,28 +1110,29 @@ async def set_broadcast_type(call: types.CallbackQuery, state: FSMContext, **_):
 @dp.message(BroadcastStates.waiting_for_content)
 async def process_broadcast_content(message: types.Message, state: FSMContext):
     if not is_admin(message.from_user.id):
-        await message.answer("Эта команда доступна только администраторам.")
+        await message.answer("Эта команда доступна только администраторам.", reply_markup=ReplyKeyboardRemove())
         await state.clear()
         return
 
     cancel_candidate = message.text or message.caption
     if is_cancel_text(cancel_candidate):
-        await message.answer("Рассылка отменена.")
-        await state.clear()
-        await send_admin_menu(message)
+        await abort_flow(message, state, "Рассылка отменена.")
         return
 
     data = await state.get_data()
     broadcast_type = data.get("broadcast_type")
     if not broadcast_type:
-        await message.answer("Тип сообщения не выбран. Начните процедуру заново.")
+        await message.answer("Тип сообщения не выбран. Начните процедуру заново.", reply_markup=ReplyKeyboardRemove())
         await state.clear()
         await send_admin_menu(message)
         return
 
     payload, caption, error = extract_magnet_payload(message, broadcast_type)
     if error:
-        await message.answer(error)
+        await message.answer(
+            error,
+            reply_markup=build_reply_keyboard(cancel=True, placeholder="Отправьте корректные данные или отмените"),
+        )
         if error.startswith("Неизвестный"):
             await state.clear()
             await send_admin_menu(message)
@@ -853,7 +1142,12 @@ async def process_broadcast_content(message: types.Message, state: FSMContext):
     await message.answer(
         "Хотите добавить кнопку с ссылкой? Отправьте текст кнопки и ссылку через разделитель `|||`,\n"
         "например: Открыть сайт|||https://example.com\n"
-        "Если кнопка не нужна, напишите 'пропустить'."
+        "Если кнопка не нужна, воспользуйтесь кнопкой 'Пропустить'.",
+        reply_markup=build_reply_keyboard(
+            cancel=True,
+            skip=True,
+            placeholder="Текст кнопки|||https://...",
+        ),
     )
     await state.set_state(BroadcastStates.waiting_for_button)
 
@@ -861,18 +1155,23 @@ async def process_broadcast_content(message: types.Message, state: FSMContext):
 @dp.message(BroadcastStates.waiting_for_button)
 async def process_broadcast_button(message: types.Message, state: FSMContext):
     if not is_admin(message.from_user.id):
-        await message.answer("Эта команда доступна только администраторам.")
+        await message.answer("Эта команда доступна только администраторам.", reply_markup=ReplyKeyboardRemove())
         await state.clear()
         return
 
     if not message.text:
-        await message.answer("Пожалуйста, отправьте текст или напишите 'пропустить'.")
+        await message.answer(
+            "Пожалуйста, отправьте текст или воспользуйтесь кнопкой 'Пропустить'.",
+            reply_markup=build_reply_keyboard(
+                cancel=True,
+                skip=True,
+                placeholder="Текст кнопки|||https://...",
+            ),
+        )
         return
 
     if is_cancel_text(message.text):
-        await message.answer("Рассылка отменена.")
-        await state.clear()
-        await send_admin_menu(message)
+        await abort_flow(message, state, "Рассылка отменена.")
         return
 
     data = await state.get_data()
@@ -883,15 +1182,28 @@ async def process_broadcast_button(message: types.Message, state: FSMContext):
         parts = [part.strip() for part in message.text.split("|||")]
         if len(parts) != 2 or not all(parts):
             await message.answer(
-                "Некорректный формат. Используйте `Текст кнопки|||https://example.com` или напишите 'пропустить'."
+                "Некорректный формат. Используйте `Текст кнопки|||https://example.com` или воспользуйтесь кнопкой 'Пропустить'.",
+                reply_markup=build_reply_keyboard(
+                    cancel=True,
+                    skip=True,
+                    placeholder="Текст кнопки|||https://...",
+                ),
             )
             return
         text_part, url_part = parts
         if not (url_part.startswith("http://") or url_part.startswith("https://")):
-            await message.answer("Ссылка должна начинаться с http:// или https://.")
+            await message.answer(
+                "Ссылка должна начинаться с http:// или https://.",
+                reply_markup=build_reply_keyboard(
+                    cancel=True,
+                    skip=True,
+                    placeholder="Текст кнопки|||https://...",
+                ),
+            )
             return
         await state.update_data(button_text=text_part, button_url=url_part)
 
+    await message.answer("Принято. Формирую предпросмотр.", reply_markup=ReplyKeyboardRemove())
     await show_broadcast_preview(message, state)
     await state.set_state(BroadcastStates.waiting_for_confirmation)
 
