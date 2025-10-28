@@ -15,7 +15,6 @@ from handlers.start import send_channel_menu
 from messages import (
     NO_REWARDS_YET,
     REWARD_NAVIGATION_PROMPT,
-    REWARD_READY_MESSAGE,
     REWARDS_LIST_TITLE,
     SUBSCRIPTION_CONFIRMED,
     SUBSCRIPTION_NOT_CONFIRMED,
@@ -79,13 +78,13 @@ async def _send_lead_magnet(user_id: int, channel_row) -> bool:
 
     try:
         if magnet_type == "link":
-            parts = [REWARD_READY_MESSAGE.format(channel_title=channel_title)]
+            parts = []
             if caption:
                 parts.append(caption)
             parts.append(f"🔗 {payload}")
             await bot.send_message(user_id, "\n\n".join(parts))
         else:
-            await bot.send_message(user_id, REWARD_READY_MESSAGE.format(channel_title=channel_title))
+            await bot.send_message(user_id)
             if magnet_type == "document":
                 await bot.send_document(user_id, payload, caption=caption)
             elif magnet_type == "photo":

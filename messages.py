@@ -16,7 +16,6 @@ SUBSCRIPTION_NOT_CONFIRMED = (
     "Похоже, подписка на «{channel_title}» ещё не оформлена. Подпишитесь и попробуйте снова."
 )
 
-REWARD_READY_MESSAGE = "Готово!"
 REWARD_NAVIGATION_PROMPT = "Что дальше?"
 
 NO_REWARDS_YET = "Вы ещё не получили файлы. Нажмите «Меню», чтобы выбрать канал."
