@@ -34,7 +34,7 @@ async def send_channel_menu(target: types.Message | types.CallbackQuery):
         text = f"{WELCOME_MESSAGE}"
     else:
         keyboard = InlineKeyboardMarkup(
-            inline_keyboard=[[InlineKeyboardButton(text="Старт", callback_data="channel:menu")]]
+            inline_keyboard=[[InlineKeyboardButton(text="Меню", callback_data="channel:menu")]]
         )
         text = f"{WELCOME_MESSAGE}\n\n{NO_CHANNELS_MESSAGE}"
 
