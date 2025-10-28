@@ -46,7 +46,7 @@ def _open_channel_keyboard(channel_id: int, invite_link: Optional[str]) -> Inlin
     if invite_link:
         rows.append([InlineKeyboardButton(text="🔗 Открыть канал", url=invite_link)])
     rows.append([InlineKeyboardButton(text="✅ Я подписался — проверить", callback_data=f"channel:check:{channel_id}")])
-    rows.append([InlineKeyboardButton(text="🔝 В меню", callback_data="channel:menu")])
+    rows.append([InlineKeyboardButton(text="Старт", callback_data="channel:menu")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -54,7 +54,7 @@ def _navigation_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="🔄 Посмотреть все файлы", callback_data="channel:view_rewards")],
-            [InlineKeyboardButton(text="🔝 Вернуться к меню", callback_data="channel:menu")],
+            [InlineKeyboardButton(text="Старт", callback_data="channel:menu")],
         ]
     )
 
@@ -127,7 +127,7 @@ async def handle_view_rewards(call: types.CallbackQuery):
 
     if not rewards:
         keyboard = InlineKeyboardMarkup(
-            inline_keyboard=[[InlineKeyboardButton(text="🔝 Вернуться к меню", callback_data="channel:menu")]]
+            inline_keyboard=[[InlineKeyboardButton(text="Старт", callback_data="channel:menu")]]
         )
         await call.message.answer(NO_REWARDS_YET, reply_markup=keyboard)
         return
@@ -142,7 +142,7 @@ async def handle_view_rewards(call: types.CallbackQuery):
             ]
             for row in rewards
         ]
-        + [[InlineKeyboardButton(text="🔝 В меню", callback_data="channel:menu")]]
+        + [[InlineKeyboardButton(text="Старт", callback_data="channel:menu")]]
     )
     await call.message.answer(REWARDS_LIST_TITLE, reply_markup=keyboard)
 

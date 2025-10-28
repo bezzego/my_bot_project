@@ -18,8 +18,8 @@ def _build_channel_keyboard(channels, include_rewards_button: bool) -> InlineKey
         for channel in channels
     ]
     if include_rewards_button:
-        rows.append([InlineKeyboardButton(text="🔄 Мои материалы", callback_data="channel:view_rewards")])
-    rows.append([InlineKeyboardButton(text="🔝 Обновить меню", callback_data="channel:menu")])
+        rows.append([InlineKeyboardButton(text="Посмотреть все файлы", callback_data="channel:view_rewards")])
+    rows.append([InlineKeyboardButton(text="Обновить меню", callback_data="channel:menu")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -34,7 +34,7 @@ async def send_channel_menu(target: types.Message | types.CallbackQuery):
         text = f"{WELCOME_MESSAGE}\n\n{MENU_PROMPT}"
     else:
         keyboard = InlineKeyboardMarkup(
-            inline_keyboard=[[InlineKeyboardButton(text="🔁 Обновить", callback_data="channel:menu")]]
+            inline_keyboard=[[InlineKeyboardButton(text="Старт", callback_data="channel:menu")]]
         )
         text = f"{WELCOME_MESSAGE}\n\n{NO_CHANNELS_MESSAGE}"
 
