@@ -4,7 +4,7 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from config import dp
 from database import add_user, fetch_channels, get_user_reward_channels
-from messages import MENU_PROMPT, NO_CHANNELS_MESSAGE, WELCOME_MESSAGE
+from messages import NO_CHANNELS_MESSAGE, WELCOME_MESSAGE
 
 
 def _build_channel_keyboard(channels, include_rewards_button: bool) -> InlineKeyboardMarkup:
@@ -31,7 +31,7 @@ async def send_channel_menu(target: types.Message | types.CallbackQuery):
 
     if channels:
         keyboard = _build_channel_keyboard(channels, has_rewards)
-        text = f"{WELCOME_MESSAGE}\n\n{MENU_PROMPT}"
+        text = f"{WELCOME_MESSAGE}"
     else:
         keyboard = InlineKeyboardMarkup(
             inline_keyboard=[[InlineKeyboardButton(text="Старт", callback_data="channel:menu")]]

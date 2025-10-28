@@ -5,7 +5,6 @@ WELCOME_MESSAGE = (
 )
 
 
-MENU_PROMPT = "Выберите канал и заберите литмагнит после подписки."
 NO_CHANNELS_MESSAGE = "Список каналов пока пуст. Загляните позже!"
 
 SUBSCRIPTION_PROMPT = (
