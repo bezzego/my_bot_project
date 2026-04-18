@@ -18,13 +18,20 @@ from aiogram.types import (
 from config import ADMIN_IDS, bot, dp
 from database import (
     add_channel,
+    add_subscription_group,
+    delete_subscription_group,
     fetch_channel,
     fetch_channels,
+    fetch_subscription_group,
+    fetch_subscription_groups,
     get_all_user_ids,
+    get_group_stats,
+    get_group_user_ids,
     get_reward_stats,
     get_user_count,
     set_channel_active,
     update_channel,
+    update_subscription_group,
 )
 from handlers.start import send_channel_menu
 
@@ -62,6 +69,30 @@ class ButtonTitleStates(StatesGroup):
     waiting_for_button_title = State()
 
 
+class AddGroupStates(StatesGroup):
+    waiting_for_name = State()
+    waiting_for_description = State()
+
+
+class EditGroupStates(StatesGroup):
+    waiting_for_group_choice = State()
+    waiting_for_name = State()
+    waiting_for_description = State()
+
+
+class DeleteGroupStates(StatesGroup):
+    waiting_for_group_choice = State()
+    waiting_for_confirmation = State()
+
+
+class GroupBroadcastStates(StatesGroup):
+    waiting_for_group_choice = State()
+    waiting_for_content_type = State()
+    waiting_for_content = State()
+    waiting_for_button = State()
+    waiting_for_confirmation = State()
+
+
 MAGNET_TYPES = {
     "document": "📎 Файл",
     "link": "🔗 Ссылка",
@@ -86,8 +117,9 @@ async def send_admin_menu(event: types.Message | types.CallbackQuery):
             [InlineKeyboardButton(text="🗑 Удалить канал", callback_data="admin:delete")],
             [InlineKeyboardButton(text="📋 Список каналов", callback_data="admin:list")],
             [InlineKeyboardButton(text="🖊 Название кнопки", callback_data="admin:button_title")],
+            [InlineKeyboardButton(text="👥 Группы подписчиков", callback_data="admin:groups")],
             [InlineKeyboardButton(text="📊 Статистика", callback_data="admin:stats")],
-            [InlineKeyboardButton(text="📨 Рассылка", callback_data="admin:broadcast")],
+            [InlineKeyboardButton(text="📨 Рассылка всем", callback_data="admin:broadcast")],
             [InlineKeyboardButton(text="⬅️ Закрыть панель", callback_data="admin:exit")],
         ]
     )
@@ -1346,3 +1378,611 @@ async def cancel_broadcast(call: types.CallbackQuery, state: FSMContext, **_):
     await call.answer("Рассылка отменена.")
     await call.message.answer("Рассылка отменена.")
     await send_admin_menu(call)
+
+
+# ═══════════════════════════ Группы подписчиков ═══════════════════════════
+
+
+async def send_groups_menu(event: types.Message | types.CallbackQuery):
+    """Отправляет меню управления группами подписчиков."""
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="➕ Создать группу", callback_data="admin:groups:add")],
+            [InlineKeyboardButton(text="✏️ Редактировать группу", callback_data="admin:groups:edit")],
+            [InlineKeyboardButton(text="🗑 Удалить группу", callback_data="admin:groups:delete")],
+            [InlineKeyboardButton(text="📋 Список групп", callback_data="admin:groups:list")],
+            [InlineKeyboardButton(text="📊 Статистика групп", callback_data="admin:groups:stats")],
+            [InlineKeyboardButton(text="📨 Рассылка по группе", callback_data="admin:groups:broadcast")],
+            [InlineKeyboardButton(text="🔝 Главное меню", callback_data="admin:menu")],
+        ]
+    )
+    text = "Управление группами подписчиков:"
+    if isinstance(event, types.CallbackQuery):
+        try:
+            await event.message.edit_text(text, reply_markup=keyboard)
+        except Exception:
+            await event.message.answer(text, reply_markup=keyboard)
+        await event.answer()
+    else:
+        await event.answer(text, reply_markup=keyboard)
+
+
+def build_group_list_keyboard(action: str) -> InlineKeyboardMarkup:
+    groups = fetch_subscription_groups()
+    if not groups:
+        return InlineKeyboardMarkup(
+            inline_keyboard=[[InlineKeyboardButton(text="🔝 Группы", callback_data="admin:groups")]]
+        )
+    rows = [
+        [InlineKeyboardButton(text=g["name"], callback_data=f"{action}:{g['id']}")]
+        for g in groups
+    ]
+    rows.append([InlineKeyboardButton(text="🔝 Группы", callback_data="admin:groups")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def group_broadcast_type_keyboard() -> InlineKeyboardMarkup:
+    buttons = [
+        [InlineKeyboardButton(text=label, callback_data=f"admin:groups:bcast:type:{key}")]
+        for key, label in BROADCAST_TYPES.items()
+    ]
+    buttons.append([InlineKeyboardButton(text="🔝 Группы", callback_data="admin:groups")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+@dp.callback_query(F.data == "admin:groups")
+@admin_only
+async def handle_admin_groups(call: types.CallbackQuery, state: FSMContext, **_):
+    await state.clear()
+    await send_groups_menu(call)
+
+
+# ── Создать группу ───────────────────────────────────────────────────────
+
+
+@dp.callback_query(F.data == "admin:groups:add")
+@admin_only
+async def start_add_group(call: types.CallbackQuery, state: FSMContext, **_):
+    await state.clear()
+    await call.answer()
+    await call.message.answer(
+        "Шаг 1/2. Введите название группы (например: «В Петербурге»).",
+        reply_markup=build_reply_keyboard(cancel=True, placeholder="Название группы"),
+    )
+    await state.set_state(AddGroupStates.waiting_for_name)
+
+
+@dp.message(AddGroupStates.waiting_for_name)
+async def process_group_name(message: types.Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        await message.answer("Недостаточно прав.", reply_markup=ReplyKeyboardRemove())
+        await state.clear()
+        return
+    if not message.text:
+        await message.answer("Отправьте текстовое название.", reply_markup=build_reply_keyboard(cancel=True))
+        return
+    if is_cancel_text(message.text):
+        await abort_flow(message, state, "Создание группы отменено.")
+        return
+    name = message.text.strip()
+    if not name:
+        await message.answer("Название не может быть пустым.", reply_markup=build_reply_keyboard(cancel=True))
+        return
+    await state.update_data(group_name=name)
+    await message.answer(
+        "Шаг 2/2. Введите описание группы — его увидят пользователи при выборе уведомлений.\n"
+        "Или нажмите «Пропустить».",
+        reply_markup=build_reply_keyboard(cancel=True, skip=True, placeholder="Описание или пропустить"),
+    )
+    await state.set_state(AddGroupStates.waiting_for_description)
+
+
+@dp.message(AddGroupStates.waiting_for_description)
+async def process_group_description(message: types.Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        await message.answer("Недостаточно прав.", reply_markup=ReplyKeyboardRemove())
+        await state.clear()
+        return
+    if not message.text:
+        await message.answer(
+            "Отправьте текст или нажмите «Пропустить».",
+            reply_markup=build_reply_keyboard(cancel=True, skip=True),
+        )
+        return
+    if is_cancel_text(message.text):
+        await abort_flow(message, state, "Создание группы отменено.")
+        return
+    data = await state.get_data()
+    name = data.get("group_name", "")
+    description = "" if is_skip_text(message.text) else message.text.strip()
+    group_id = add_subscription_group(name, description)
+    await state.clear()
+    await message.answer(
+        f"Группа «{name}» создана (ID: {group_id}).",
+        reply_markup=ReplyKeyboardRemove(),
+    )
+    await send_groups_menu(message)
+
+
+# ── Редактировать группу ──────────────────────────────────────────────────
+
+
+@dp.callback_query(F.data == "admin:groups:edit")
+@admin_only
+async def start_edit_group(call: types.CallbackQuery, state: FSMContext, **_):
+    await state.clear()
+    await call.answer()
+    groups = fetch_subscription_groups()
+    if not groups:
+        await call.message.answer("Активных групп нет.")
+        return
+    await call.message.answer(
+        "Выберите группу для редактирования:",
+        reply_markup=build_group_list_keyboard("admin:groups:editchoice"),
+    )
+    await state.set_state(EditGroupStates.waiting_for_group_choice)
+
+
+@dp.callback_query(EditGroupStates.waiting_for_group_choice, F.data.startswith("admin:groups:editchoice:"))
+@admin_only
+async def choose_group_for_edit(call: types.CallbackQuery, state: FSMContext, **_):
+    try:
+        group_id = int(call.data.split(":")[-1])
+    except (ValueError, IndexError):
+        await call.answer("Не удалось определить группу.", show_alert=True)
+        return
+    group = fetch_subscription_group(group_id)
+    if not group:
+        await call.answer("Группа не найдена.", show_alert=True)
+        return
+    await state.update_data(
+        group_id=group_id,
+        group_name=group["name"],
+        group_description=group["description"],
+    )
+    await call.answer()
+    await call.message.answer(
+        f"Редактируем группу «{group['name']}».\n"
+        f"Текущее описание: {group['description'] or '(нет)'}\n\n"
+        "Введите новое название или нажмите «Пропустить», чтобы не менять.",
+        reply_markup=build_reply_keyboard(cancel=True, skip=True, placeholder="Новое название"),
+    )
+    await state.set_state(EditGroupStates.waiting_for_name)
+
+
+@dp.message(EditGroupStates.waiting_for_name)
+async def process_edit_group_name(message: types.Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        await message.answer("Недостаточно прав.", reply_markup=ReplyKeyboardRemove())
+        await state.clear()
+        return
+    if not message.text:
+        await message.answer("Отправьте текст.", reply_markup=build_reply_keyboard(cancel=True, skip=True))
+        return
+    if is_cancel_text(message.text):
+        await abort_flow(message, state, "Редактирование группы отменено.")
+        return
+    if not is_skip_text(message.text):
+        new_name = message.text.strip()
+        if new_name:
+            await state.update_data(group_name=new_name)
+    await message.answer(
+        "Введите новое описание или нажмите «Пропустить».",
+        reply_markup=build_reply_keyboard(cancel=True, skip=True, placeholder="Новое описание"),
+    )
+    await state.set_state(EditGroupStates.waiting_for_description)
+
+
+@dp.message(EditGroupStates.waiting_for_description)
+async def process_edit_group_description(message: types.Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        await message.answer("Недостаточно прав.", reply_markup=ReplyKeyboardRemove())
+        await state.clear()
+        return
+    if not message.text:
+        await message.answer("Отправьте текст.", reply_markup=build_reply_keyboard(cancel=True, skip=True))
+        return
+    if is_cancel_text(message.text):
+        await abort_flow(message, state, "Редактирование группы отменено.")
+        return
+    data = await state.get_data()
+    group_id = data.get("group_id")
+    new_name = data.get("group_name", "")
+    new_description = data.get("group_description", "") if is_skip_text(message.text) else message.text.strip()
+    updated = update_subscription_group(group_id, name=new_name, description=new_description)
+    await state.clear()
+    if updated:
+        await message.answer(f"Группа обновлена: «{new_name}».", reply_markup=ReplyKeyboardRemove())
+    else:
+        await message.answer("Не удалось обновить группу.", reply_markup=ReplyKeyboardRemove())
+    await send_groups_menu(message)
+
+
+# ── Удалить группу ───────────────────────────────────────────────────────
+
+
+@dp.callback_query(F.data == "admin:groups:delete")
+@admin_only
+async def start_delete_group(call: types.CallbackQuery, state: FSMContext, **_):
+    await state.clear()
+    await call.answer()
+    groups = fetch_subscription_groups()
+    if not groups:
+        await call.message.answer("Активных групп нет.")
+        return
+    await call.message.answer(
+        "Выберите группу для удаления:",
+        reply_markup=build_group_list_keyboard("admin:groups:delchoice"),
+    )
+    await state.set_state(DeleteGroupStates.waiting_for_group_choice)
+
+
+@dp.callback_query(DeleteGroupStates.waiting_for_group_choice, F.data.startswith("admin:groups:delchoice:"))
+@admin_only
+async def confirm_delete_group(call: types.CallbackQuery, state: FSMContext, **_):
+    try:
+        group_id = int(call.data.split(":")[-1])
+    except (ValueError, IndexError):
+        await call.answer("Не удалось определить группу.", show_alert=True)
+        return
+    group = fetch_subscription_group(group_id)
+    if not group:
+        await call.answer("Группа не найдена.", show_alert=True)
+        return
+    subscribers = len(get_group_user_ids(group_id))
+    await state.update_data(group_id=group_id, group_name=group["name"])
+    await call.answer()
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="✅ Да, удалить", callback_data=f"admin:groups:delconfirm:{group_id}")],
+            [InlineKeyboardButton(text="↩️ Отмена", callback_data="admin:groups")],
+        ]
+    )
+    await call.message.answer(
+        f"Удалить группу «{group['name']}»?\n"
+        f"Подписчиков: {subscribers}\n\n"
+        "Все подписки будут удалены безвозвратно.",
+        reply_markup=keyboard,
+    )
+    await state.set_state(DeleteGroupStates.waiting_for_confirmation)
+
+
+@dp.callback_query(DeleteGroupStates.waiting_for_confirmation, F.data.startswith("admin:groups:delconfirm:"))
+@admin_only
+async def complete_delete_group(call: types.CallbackQuery, state: FSMContext, **_):
+    data = await state.get_data()
+    stored_id = data.get("group_id")
+    try:
+        group_id = int(call.data.split(":")[-1])
+    except (ValueError, IndexError):
+        await call.answer("Ошибка.", show_alert=True)
+        return
+    if stored_id and stored_id != group_id:
+        await call.answer("Группа не совпадает с выбранной ранее. Повторите.", show_alert=True)
+        await state.clear()
+        await send_groups_menu(call)
+        return
+    group_name = data.get("group_name", "")
+    deleted = delete_subscription_group(group_id)
+    await state.clear()
+    await call.answer()
+    if deleted:
+        await call.message.answer(f"Группа «{group_name}» и все её подписки удалены.")
+    else:
+        await call.message.answer("Не удалось удалить группу.")
+    await send_groups_menu(call)
+
+
+# ── Список групп ─────────────────────────────────────────────────────────
+
+
+@dp.callback_query(F.data == "admin:groups:list")
+@admin_only
+async def handle_groups_list(call: types.CallbackQuery, **_):
+    await call.answer()
+    groups = fetch_subscription_groups(active_only=False)
+    if not groups:
+        await call.message.answer("Групп пока нет.")
+        return
+    lines = []
+    for g in groups:
+        status = "✅ Активна" if g["is_active"] else "🚫 Неактивна"
+        lines.append(f"{g['id']}. {g['name']} — {status}")
+        if g["description"]:
+            lines.append(f"   {g['description']}")
+        lines.append("")
+    await call.message.answer("\n".join(lines).strip())
+
+
+# ── Статистика групп ─────────────────────────────────────────────────────
+
+
+@dp.callback_query(F.data == "admin:groups:stats")
+@admin_only
+async def handle_groups_stats(call: types.CallbackQuery, **_):
+    await call.answer()
+    stats = get_group_stats()
+    total_users = get_user_count()
+    lines = [f"Всего пользователей бота: {total_users}", ""]
+    if stats:
+        lines.append("Подписчики по группам:")
+        for row in stats:
+            active_mark = "" if row["is_active"] else " (неактивна)"
+            lines.append(f"  • {row['name']}{active_mark}: {row['subscribers']} чел.")
+            if row["description"]:
+                lines.append(f"    {row['description']}")
+    else:
+        lines.append("Групп пока нет.")
+    await call.message.answer("\n".join(lines))
+
+
+# ── Рассылка по группе ───────────────────────────────────────────────────
+
+
+@dp.callback_query(F.data == "admin:groups:broadcast")
+@admin_only
+async def start_group_broadcast(call: types.CallbackQuery, state: FSMContext, **_):
+    await state.clear()
+    await call.answer()
+    groups = fetch_subscription_groups()
+    if not groups:
+        await call.message.answer("Нет активных групп для рассылки.")
+        return
+    await call.message.answer(
+        "Выберите группу для рассылки:",
+        reply_markup=build_group_list_keyboard("admin:groups:bcast"),
+    )
+    await state.set_state(GroupBroadcastStates.waiting_for_group_choice)
+
+
+@dp.callback_query(GroupBroadcastStates.waiting_for_group_choice, F.data.startswith("admin:groups:bcast:"))
+@admin_only
+async def choose_group_for_broadcast(call: types.CallbackQuery, state: FSMContext, **_):
+    parts = call.data.split(":")
+    # admin:groups:bcast:<id> — ровно 4 части
+    if len(parts) != 4:
+        await call.answer("Неизвестная команда.", show_alert=True)
+        return
+    try:
+        group_id = int(parts[-1])
+    except ValueError:
+        await call.answer("Не удалось определить группу.", show_alert=True)
+        return
+    group = fetch_subscription_group(group_id)
+    if not group:
+        await call.answer("Группа не найдена.", show_alert=True)
+        return
+    subscribers_count = len(get_group_user_ids(group_id))
+    await state.update_data(
+        target_group_id=group_id,
+        target_group_name=group["name"],
+        target_subscribers=subscribers_count,
+    )
+    await call.answer()
+    await call.message.answer(
+        f"Группа: «{group['name']}» ({subscribers_count} подписчиков)\n\nВыберите тип сообщения:",
+        reply_markup=group_broadcast_type_keyboard(),
+    )
+    await state.set_state(GroupBroadcastStates.waiting_for_content_type)
+
+
+@dp.callback_query(GroupBroadcastStates.waiting_for_content_type, F.data.startswith("admin:groups:bcast:type:"))
+@admin_only
+async def set_group_broadcast_type(call: types.CallbackQuery, state: FSMContext, **_):
+    broadcast_type = call.data.split(":")[-1]
+    if broadcast_type not in BROADCAST_TYPES:
+        await call.answer("Неизвестный тип.", show_alert=True)
+        return
+    await state.update_data(broadcast_type=broadcast_type)
+    await call.answer()
+    prompts = {
+        "text": "Отправьте текст сообщения.",
+        "photo": "Отправьте фотографию с подписью (по желанию).",
+        "video": "Отправьте видео с подписью (по желанию).",
+        "document": "Отправьте документ с подписью (по желанию).",
+    }
+    await call.message.answer(
+        prompts.get(broadcast_type, "Отправьте содержимое."),
+        reply_markup=build_reply_keyboard(cancel=True, placeholder="Отправьте сообщение или отмените"),
+    )
+    await state.set_state(GroupBroadcastStates.waiting_for_content)
+
+
+@dp.message(GroupBroadcastStates.waiting_for_content)
+async def process_group_broadcast_content(message: types.Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        await message.answer("Недостаточно прав.", reply_markup=ReplyKeyboardRemove())
+        await state.clear()
+        return
+    cancel_candidate = message.text or message.caption
+    if is_cancel_text(cancel_candidate):
+        await abort_flow(message, state, "Рассылка отменена.")
+        return
+    data = await state.get_data()
+    broadcast_type = data.get("broadcast_type")
+    if not broadcast_type:
+        await message.answer("Тип не выбран. Начните заново.", reply_markup=ReplyKeyboardRemove())
+        await state.clear()
+        await send_groups_menu(message)
+        return
+    payload, caption, error = extract_magnet_payload(message, broadcast_type)
+    if error:
+        await message.answer(
+            error,
+            reply_markup=build_reply_keyboard(cancel=True, placeholder="Отправьте корректные данные или отмените"),
+        )
+        if error.startswith("Неизвестный"):
+            await state.clear()
+            await send_groups_menu(message)
+        return
+    await state.update_data(broadcast_payload=payload, broadcast_caption=caption)
+    await message.answer(
+        "Хотите добавить кнопку со ссылкой? Формат: Текст кнопки|||https://...\n"
+        "Если кнопка не нужна — нажмите «Пропустить».",
+        reply_markup=build_reply_keyboard(
+            cancel=True, skip=True, placeholder="Текст кнопки|||https://..."
+        ),
+    )
+    await state.set_state(GroupBroadcastStates.waiting_for_button)
+
+
+@dp.message(GroupBroadcastStates.waiting_for_button)
+async def process_group_broadcast_button(message: types.Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        await message.answer("Недостаточно прав.", reply_markup=ReplyKeyboardRemove())
+        await state.clear()
+        return
+    if not message.text:
+        await message.answer(
+            "Отправьте текст или нажмите «Пропустить».",
+            reply_markup=build_reply_keyboard(cancel=True, skip=True),
+        )
+        return
+    if is_cancel_text(message.text):
+        await abort_flow(message, state, "Рассылка отменена.")
+        return
+    if is_skip_text(message.text):
+        await state.update_data(button_text=None, button_url=None)
+    else:
+        parts = [p.strip() for p in message.text.split("|||")]
+        if len(parts) != 2 or not all(parts):
+            await message.answer(
+                "Некорректный формат. Используйте «Текст|||https://...» или нажмите «Пропустить».",
+                reply_markup=build_reply_keyboard(cancel=True, skip=True),
+            )
+            return
+        text_part, url_part = parts
+        if not (url_part.startswith("http://") or url_part.startswith("https://")):
+            await message.answer(
+                "Ссылка должна начинаться с http:// или https://.",
+                reply_markup=build_reply_keyboard(cancel=True, skip=True),
+            )
+            return
+        await state.update_data(button_text=text_part, button_url=url_part)
+    await message.answer("Формирую предпросмотр…", reply_markup=ReplyKeyboardRemove())
+    await show_group_broadcast_preview(message, state)
+    await state.set_state(GroupBroadcastStates.waiting_for_confirmation)
+
+
+async def show_group_broadcast_preview(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    broadcast_type = data.get("broadcast_type")
+    payload = data.get("broadcast_payload")
+    caption = data.get("broadcast_caption")
+    button_text = data.get("button_text")
+    button_url = data.get("button_url")
+    group_name = data.get("target_group_name", "")
+    subscribers = data.get("target_subscribers", 0)
+
+    if not broadcast_type or not payload:
+        await message.answer("Не удалось подготовить предпросмотр. Рассылка отменена.")
+        await state.clear()
+        await send_groups_menu(message)
+        return
+
+    markup = build_link_keyboard(button_text, button_url)
+    try:
+        if broadcast_type == "text":
+            await message.answer(payload, reply_markup=markup)
+        elif broadcast_type == "photo":
+            await message.answer_photo(payload, caption=caption, reply_markup=markup)
+        elif broadcast_type == "video":
+            await message.answer_video(payload, caption=caption, reply_markup=markup)
+        elif broadcast_type == "document":
+            await message.answer_document(payload, caption=caption, reply_markup=markup)
+        else:
+            await message.answer("Неизвестный тип. Рассылка отменена.")
+            await state.clear()
+            await send_groups_menu(message)
+            return
+    except TelegramBadRequest as exc:
+        logging.error("Ошибка предпросмотра группового сообщения: %s", exc)
+        await message.answer("Не удалось сформировать предпросмотр. Проверьте данные.")
+        return
+
+    summary = [
+        "Предпросмотр отправлен выше.",
+        f"Группа: «{group_name}»",
+        f"Тип: {BROADCAST_TYPES.get(broadcast_type, broadcast_type)}",
+        f"Получателей: {subscribers}",
+    ]
+    if button_text and button_url:
+        summary.append(f"Кнопка: {button_text} → {button_url}")
+
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="✅ Отправить", callback_data="admin:groups:bcast:send")],
+            [InlineKeyboardButton(text="↩️ Отмена", callback_data="admin:groups:bcast:cancel")],
+        ]
+    )
+    await message.answer("\n".join(summary), reply_markup=keyboard)
+
+
+@dp.callback_query(GroupBroadcastStates.waiting_for_confirmation, F.data == "admin:groups:bcast:send")
+@admin_only
+async def execute_group_broadcast(call: types.CallbackQuery, state: FSMContext, **_):
+    data = await state.get_data()
+    target_group_id = data.get("target_group_id")
+    broadcast_type = data.get("broadcast_type")
+    payload = data.get("broadcast_payload")
+    caption = data.get("broadcast_caption")
+    button_text = data.get("button_text")
+    button_url = data.get("button_url")
+    group_name = data.get("target_group_name", "")
+
+    if not target_group_id or not broadcast_type or not payload:
+        await call.answer("Недостаточно данных.", show_alert=True)
+        await state.clear()
+        await send_groups_menu(call)
+        return
+
+    markup = build_link_keyboard(button_text, button_url)
+    recipients = get_group_user_ids(target_group_id)
+
+    await call.answer("Рассылка запущена.")
+    status_message = await call.message.answer(
+        f"Отправляю сообщение {len(recipients)} подписчикам группы «{group_name}»…"
+    )
+
+    success = 0
+    failed = 0
+
+    for user_id in recipients:
+        try:
+            await dispatch_broadcast_to_user(user_id, broadcast_type, payload, caption, markup)
+            success += 1
+        except TelegramRetryAfter as exc:
+            await asyncio.sleep(exc.retry_after + 1)
+            try:
+                await dispatch_broadcast_to_user(user_id, broadcast_type, payload, caption, markup)
+                success += 1
+            except Exception as inner_exc:
+                logging.warning("Ошибка после паузы для %s: %s", user_id, inner_exc)
+                failed += 1
+        except TelegramForbiddenError:
+            failed += 1
+        except TelegramBadRequest as exc:
+            logging.warning("Ошибка отправки пользователю %s: %s", user_id, exc)
+            failed += 1
+        except Exception as exc:
+            logging.error("Неожиданная ошибка при рассылке %s: %s", user_id, exc)
+            failed += 1
+        await asyncio.sleep(0.05)
+
+    await state.clear()
+    summary = (
+        f"Рассылка по группе «{group_name}» завершена.\n"
+        f"Успешно: {success}\n"
+        f"Не доставлено: {failed}"
+    )
+    await status_message.edit_text(summary)
+    await send_groups_menu(call)
+
+
+@dp.callback_query(GroupBroadcastStates.waiting_for_confirmation, F.data == "admin:groups:bcast:cancel")
+@admin_only
+async def cancel_group_broadcast(call: types.CallbackQuery, state: FSMContext, **_):
+    await state.clear()
+    await call.answer("Рассылка отменена.")
+    await call.message.answer("Рассылка отменена.")
+    await send_groups_menu(call)

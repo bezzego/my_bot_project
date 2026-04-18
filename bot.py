@@ -8,6 +8,7 @@ from config import bot, dp
 import handlers.start
 import handlers.callbacks
 import handlers.admin
+import handlers.groups
 
 
 async def main():

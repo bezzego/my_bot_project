@@ -62,6 +62,29 @@ def init_db():
             )
             """
         )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS subscription_groups (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                name        TEXT NOT NULL,
+                description TEXT NOT NULL DEFAULT '',
+                is_active   INTEGER NOT NULL DEFAULT 1,
+                created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS user_group_subscriptions (
+                user_id       INTEGER NOT NULL,
+                group_id      INTEGER NOT NULL,
+                subscribed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (user_id, group_id),
+                FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE,
+                FOREIGN KEY (group_id) REFERENCES subscription_groups(id) ON DELETE CASCADE
+            )
+            """
+        )
         _ensure_channel_schema(cursor)
         conn.commit()
 
@@ -240,6 +263,127 @@ def get_user_reward_channels(user_id: int) -> List[sqlite3.Row]:
             ORDER BY r.delivered_at DESC
             """,
             (user_id,),
+        )
+        return cursor.fetchall()
+
+
+def add_subscription_group(name: str, description: str) -> int:
+    """Создаёт новую группу подписчиков и возвращает её ID."""
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT INTO subscription_groups (name, description) VALUES (?, ?)",
+            (name, description),
+        )
+        conn.commit()
+        return cursor.lastrowid
+
+
+def fetch_subscription_groups(active_only: bool = True) -> List[sqlite3.Row]:
+    """Возвращает список групп подписчиков."""
+    query = "SELECT * FROM subscription_groups"
+    if active_only:
+        query += " WHERE is_active = 1"
+    query += " ORDER BY id"
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(query)
+        return cursor.fetchall()
+
+
+def fetch_subscription_group(group_id: int) -> Optional[sqlite3.Row]:
+    """Возвращает одну группу по ID."""
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM subscription_groups WHERE id = ?", (group_id,))
+        return cursor.fetchone()
+
+
+def update_subscription_group(group_id: int, **fields) -> bool:
+    """Обновляет произвольные поля группы."""
+    if not fields:
+        return False
+    assignments = ", ".join(f"{name} = ?" for name in fields)
+    params: Tuple = tuple(fields.values()) + (group_id,)
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(f"UPDATE subscription_groups SET {assignments} WHERE id = ?", params)
+        conn.commit()
+        return cursor.rowcount > 0
+
+
+def delete_subscription_group(group_id: int) -> bool:
+    """Полностью удаляет группу вместе со всеми подписками (CASCADE)."""
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM subscription_groups WHERE id = ?", (group_id,))
+        conn.commit()
+        return cursor.rowcount > 0
+
+
+def toggle_user_group(user_id: int, group_id: int) -> bool:
+    """Переключает подписку пользователя на группу.
+    Возвращает True, если теперь подписан; False, если отписан."""
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT 1 FROM user_group_subscriptions WHERE user_id = ? AND group_id = ?",
+            (user_id, group_id),
+        )
+        already = cursor.fetchone() is not None
+        if already:
+            cursor.execute(
+                "DELETE FROM user_group_subscriptions WHERE user_id = ? AND group_id = ?",
+                (user_id, group_id),
+            )
+        else:
+            cursor.execute(
+                "INSERT INTO user_group_subscriptions (user_id, group_id) VALUES (?, ?)",
+                (user_id, group_id),
+            )
+        conn.commit()
+        return not already
+
+
+def get_user_group_ids(user_id: int) -> List[int]:
+    """Возвращает ID групп, на которые подписан пользователь."""
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT group_id FROM user_group_subscriptions WHERE user_id = ?",
+            (user_id,),
+        )
+        return [row["group_id"] for row in cursor.fetchall()]
+
+
+def get_group_user_ids(group_id: int) -> List[int]:
+    """Возвращает ID пользователей, подписанных на группу."""
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT user_id FROM user_group_subscriptions WHERE group_id = ?",
+            (group_id,),
+        )
+        return [row["user_id"] for row in cursor.fetchall()]
+
+
+def get_group_stats() -> List[sqlite3.Row]:
+    """Возвращает статистику подписчиков по группам."""
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT
+                g.id,
+                g.name,
+                g.description,
+                g.is_active,
+                COUNT(s.user_id) AS subscribers
+            FROM subscription_groups AS g
+            LEFT JOIN user_group_subscriptions AS s ON s.group_id = g.id
+            GROUP BY g.id
+            ORDER BY g.id
+            """
         )
         return cursor.fetchall()
 
