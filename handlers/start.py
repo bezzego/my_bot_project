@@ -1,10 +1,10 @@
 from aiogram import types
-from aiogram.filters import Command, CommandObject
+from aiogram.filters import Command
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from config import dp
 from database import add_user, fetch_channels, get_user_reward_channels
-from handlers.groups import send_city_selection_forced, send_city_selection_if_needed
+from handlers.groups import send_city_selection_if_needed
 from messages import NO_CHANNELS_MESSAGE, WELCOME_MESSAGE
 
 
@@ -50,16 +50,11 @@ async def send_channel_menu(target: types.Message | types.CallbackQuery):
         await target.answer(text, reply_markup=keyboard)
 
 
-async def send_welcome(message: types.Message, command: CommandObject = None):
-    """Обработчик команды /start. При payload 'city' — сразу показывает выбор города."""
+async def send_welcome(message: types.Message):
+    """Обработчик команды /start."""
     user_id = message.from_user.id
     username = message.from_user.username or ""
     add_user(user_id, username)
-
-    if command and command.args == "city":
-        await send_city_selection_forced(message, user_id)
-        return
-
     await send_channel_menu(message)
     await send_city_selection_if_needed(message, user_id)
 

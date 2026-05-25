@@ -41,15 +41,6 @@ async def send_city_selection_if_needed(message: types.Message, user_id: int):
     await message.answer(_ONBOARDING_HEADER, reply_markup=_groups_keyboard(groups, subscribed))
 
 
-async def send_city_selection_forced(message: types.Message, user_id: int):
-    """Показывает выбор города принудительно (для deep link /start city)."""
-    groups = fetch_subscription_groups()
-    if not groups:
-        await message.answer("Группы пока не настроены. Загляните позже!")
-        return
-    subscribed = set(get_user_group_ids(user_id))
-    await message.answer(_ONBOARDING_HEADER, reply_markup=_groups_keyboard(groups, subscribed))
-
 
 @dp.callback_query(F.data == "subs:menu")
 async def handle_subs_menu(call: types.CallbackQuery):
