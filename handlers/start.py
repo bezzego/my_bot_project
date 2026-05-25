@@ -4,6 +4,7 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from config import dp
 from database import add_user, fetch_channels, get_user_reward_channels
+from handlers.groups import send_city_selection_if_needed
 from messages import NO_CHANNELS_MESSAGE, WELCOME_MESSAGE
 
 
@@ -55,6 +56,7 @@ async def send_welcome(message: types.Message):
     username = message.from_user.username or ""
     add_user(user_id, username)
     await send_channel_menu(message)
+    await send_city_selection_if_needed(message, user_id)
 
 
 dp.message.register(send_welcome, Command("start"))

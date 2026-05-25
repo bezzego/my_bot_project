@@ -4,6 +4,11 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from config import dp
 from database import fetch_subscription_groups, get_user_group_ids, toggle_user_group
 
+_ONBOARDING_HEADER = (
+    "<b>Из какого вы города?</b>\n\n"
+    "<i>Выберите свой город, чтобы получать актуальные предложения именно для вас</i>"
+)
+
 _HEADER = (
     "<b>Выберите, какие скидки вам интересно получать</b>\n\n"
     "<i>Будем присылать только горящие предложения и билеты по сниженной цене</i>"
@@ -23,6 +28,17 @@ def _groups_keyboard(groups, subscribed_ids: set) -> InlineKeyboardMarkup:
     ]
     rows.append([InlineKeyboardButton(text="Готово ✔️", callback_data="subs:done")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def send_city_selection_if_needed(message: types.Message, user_id: int):
+    """Показывает выбор города новому пользователю, если он ещё не выбрал группу."""
+    groups = fetch_subscription_groups()
+    if not groups:
+        return
+    subscribed = set(get_user_group_ids(user_id))
+    if subscribed:
+        return
+    await message.answer(_ONBOARDING_HEADER, reply_markup=_groups_keyboard(groups, subscribed))
 
 
 @dp.callback_query(F.data == "subs:menu")

@@ -84,7 +84,6 @@ async def _send_lead_magnet(user_id: int, channel_row) -> bool:
             parts.append(f"🔗 {payload}")
             await bot.send_message(user_id, "\n\n".join(parts))
         else:
-            await bot.send_message(user_id)
             if magnet_type == "document":
                 await bot.send_document(user_id, payload, caption=caption)
             elif magnet_type == "photo":
